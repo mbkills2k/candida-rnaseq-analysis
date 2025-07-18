@@ -1,0 +1,13 @@
+sample,title,cell_type,strain,treatment,replicate
+GSM8282308,SC5314 Fluconazole R1,Prototrophic wildtype,SC5314,Fluconazole,1
+GSM8282309,SC5314 Fluconazole R2,Prototrophic wildtype,SC5314,Fluconazole,2
+GSM8282310,SC5314 Fluconazole R3,Prototrophic wildtype,SC5314,Fluconazole,3
+GSM8282311,SC5314 Control R1,Prototrophic wildtype,SC5314,Control,1
+GSM8282312,SC5314 Control R2,Prototrophic wildtype,SC5314,Control,2
+GSM8282313,SC5314 Control R3,Prototrophic wildtype,SC5314,Control,3
+GSM8282314,PLC124 Fluconazole R1,Clinical isolate; fluconazole resistant,PLC124,Fluconazole,1
+GSM8282315,PLC124 Fluconazole R2,Clinical isolate; fluconazole resistant,PLC124,Fluconazole,2
+GSM8282316,PLC124 Fluconazole R3,Clinical isolate; fluconazole resistant,PLC124,Fluconazole,3
+GSM8282317,PLC124 Control R1,Clinical isolate; fluconazole resistant,PLC124,Control,1
+GSM8282318,PLC124 Control R2,Clinical isolate; fluconazole resistant,PLC124,Control,2
+GSM8282319,PLC124 Control R3,Clinical isolate; fluconazole resistant,PLC124,Control,3
