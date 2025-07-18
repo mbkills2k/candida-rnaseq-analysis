@@ -1,0 +1,353 @@
+---
+title: '"Differential Expression Analysis of *Candida albicans* Fluconazole Response"'
+author: "Mohit Batra"
+date: "`r Sys.Date()`"
+output: 
+    html_document:
+        toc: true
+        toc_depth: 2
+        number_sections: false
+        code_folding: show
+---
+<style>
+caption {
+  color: black;
+  font-weight: bold;
+  text-align: center;
+  font-size: 16px;
+}
+</style>
+
+# Overview
+
+This notebook presents a differential gene expression analysis of *Candida albicans* in response to fluconazole treatment, using publicly available RNA-seq data (GEO accession: [GSE267941](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE267941)).
+
+Main steps:
+
+-   Data import and quality checks
+
+-   Exploratory data analysis
+
+-   Differential expression analysis using DESeq2
+
+-   Visualization of results
+
+-   Brief interpretation
+
+------------------------------------------------------------------------
+
+# 1. Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+# Load required libraries
+library(kableExtra)
+library(tidyverse)
+library(DESeq2)
+library(pheatmap)
+library(here)
+library(readr)
+library(apeglm)
+```
+
+# 2. Data Import
+
+We have installed the counts and metadata of the study from GEO database with the GSE267941 id. Next, the metadata is processed to keep only the columns that are required for the future downstream analyses, and raw count data is also preprocessed by removing unnecessary informations and matching the sample IDs with the ones in metadata.
+
+Let's import these datasets:
+
+```{r data_import, message=FALSE, warning=FALSE}
+# Import counts and metadata with here()
+counts <- read.csv(here("data","raw","GSE267941_processed_counts.csv"), row.names = 1)
+
+meta <- read.csv(here("data", "raw", "GSE267941_cleaned_metadata.csv"))
+```
+
+# 3. Exploratory Data Analysis (EDA)
+
+In this section, we perform quality control and explore the structure of the RNA-seq data prior to differential expression analysis.
+
+This step is critical to identify any technical outliers, library size biases, or unexpected patterns that could confound downstream analyses.
+
+Given the experimental design—which includes sensitive (SC5314) and resistant (PLC124) *Candida albicans* strains, each treated with fluconazole or control (DMSO), we expect clear groupings according to strain and treatment.
+
+## 3.1 Library Size Assessment
+
+We first assess library sizes by summing the total counts per sample.\
+Substantial variation in sequencing depth across samples can indicate technical issues or normalization requirements.
+
+```{r libsize-barplot, fig.width=8, fig.height=6}
+library_sizes <- colSums(counts)
+
+lib_size_df <- tibble(
+  sample = names(library_sizes),
+  libsize = as.numeric(library_sizes)
+)
+
+ggplot(lib_size_df, aes(x=sample, y=libsize)) +
+  geom_bar(stat="identity", fill="steelblue") +
+  theme_minimal() +
+  labs(title="Library Sizes per Sample", y="Total Read Counts") +
+  theme(axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1, size=9, colour = "black"),
+        axis.title.x = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        axis.text.y = element_text(colour = "black", size = 9))
+
+```
+
+The barplot above shows the total number of mapped reads per sample (library size) across all RNA-seq libraries. All samples exhibit relatively similar library sizes, indicating consistent sequencing depth and successful library preparation.
+
+Minor differences between samples are expected and will be accounted for during normalization in downstream analyses. No samples appear as extreme outliers in terms of library size, so all are retained for further analysis.
+
+## 3.2. Principal Component Analysis (PCA)
+
+Principal component analysis (PCA) provides a global overview of variance among samples, reducing complex gene expression profiles into principal axes.
+
+Here, we use variance-stabilized data to visualize sample clustering according to strain and treatment.
+
+```{r pca, warning=FALSE, message=FALSE}
+# Build DESeqDataSet for transformations/QC
+
+meta2 <- meta %>% column_to_rownames("sample")
+
+# Reorder metadata to match counts columns
+meta2 <- meta2[colnames(counts), ]
+
+dds <- DESeqDataSetFromMatrix(
+  countData = counts,
+  colData =  meta2,
+  design = ~ strain + treatment
+)
+
+# Variance stabilizing transformation (for visualization)
+vsd <- vst(dds)
+
+# PCA plot
+plotPCA(vsd, intgroup = c("strain", "treatment")) +
+  ggtitle("PCA of All Samples")
+```
+
+The PCA plot above summarizes the main axes of variation in the gene expression data:
+
+-   **PC1 (78% variance)** clearly separates the two *Candida albicans* strains: SC5314 (fluconazole-sensitive) and PLC124 (fluconazole-resistant).
+-   **PC2 (11% variance)** provides further separation, primarily reflecting the treatment effect (fluconazole vs. control) within each strain.
+
+Samples cluster tightly within each experimental group, with clear distinction between strains and treatments.\
+This strong separation confirms high-quality data and supports the study design: both strain and treatment are major drivers of transcriptomic variation in this experiment. No outliers or mislabeled samples are apparent.
+
+These results validate the experimental groups and justify proceeding with differential expression analysis.
+
+# 4. Differential Expression Analysis
+
+Differential gene expression analysis identifies genes whose transcript abundance is significantly altered by fluconazole treatment in either strain.
+
+This analysis enables us to uncover molecular mechanisms underlying antifungal sensitivity and resistance in ***C. albicans***.
+
+## 4.1 Running DESeq2
+
+We apply DESeq2 to fit a model that accounts for both strain and treatment effects, following the experimental design. The results are summarized for the main treatment effect (fluconazole vs. control).
+
+```{r deseq2, message=FALSE, warning=FALSE}
+dds <- DESeq(dds)
+res <- results(dds, contrast = c("treatment", "Fluconazole", "Control"))
+res_shrunk <- lfcShrink(dds, coef="treatment_Fluconazole_vs_Control", type="apeglm")
+summary(res)
+```
+
+DESeq2 by default uses padj\<0.1. Let's try a more strandard cut-off 0.05:
+
+```{r deseq_cutoffs}
+sum(res$padj < 0.05, na.rm=TRUE)  # Total DE genes at 5% FDR
+sum(res$padj < 0.05 & res$log2FoldChange > 0, na.rm=TRUE)  # Upregulated
+sum(res$padj < 0.05 & res$log2FoldChange < 0, na.rm=TRUE)  # Downregulated
+```
+
+Using an adjusted p-value threshold of 0.05 (Benjamini-Hochberg FDR correction):
+
+-   **Total differentially expressed genes:** 71\
+-   **Upregulated by fluconazole:** 64\
+-   **Downregulated by fluconazole:** 7
+
+These findings indicate that fluconazole treatment in *Candida albicans* induces a strong, directional transcriptomic response, with most significant genes showing increased expression. The results are based on rigorous multiple-testing correction, ensuring that reported differences are statistically robust.
+
+Let's export our results in a csv file.
+
+```{r}
+# Let's remove the "cd-" prefix from protein ids and save the dataframe
+write_csv(as.data.frame(res_shrunk) %>% rownames_to_column(var = "gene") %>% mutate(gene = str_replace_all(gene, pattern = "^cds-", replacement = "")), here("results", "tables", "DESeq2_results.csv"))
+```
+
+## 4.2 Top DEGs and Gene Annotation
+
+For *Candida albicans* organism, only RefSeq Protein IDs are available in our data, and it lacks gene name annotation in common databases like Ensembl Fungi, Candida Genome Database, etc. Therefore, we will use **UniProt**'s ID Mapping tool via web browser by uploading our protein ids. As a result, we will retrieve the corresponding gene names, and then we will match these genes to the protein ids in our DEG results. Let's save the protein IDs from our results in a txt file, and then use **UniProt** to get the gene names:
+
+```{r deg_results, message=FALSE, warning=FALSE}
+# Load the DESeq2 results data
+degs <- read_csv(file = here("results", "tables", "DESeq2_results.csv"))
+
+# Save gene ids on a txt file so that we can use it on UniProt database
+write.table(x = degs$gene, file = here("results","DESeq_raw_gene_ids.txt"), sep = "\t",row.names = F, col.names = F, quote = F)
+```
+
+Here is a screenshot of UniProt ID Mapping step:
+
+![ **UniProt ID mapping page**](images/Screenshot from 2025-07-17 12-34-32.png){width="464"}
+
+
+Now that we got the results from **UniProt**, let's load the data that includes gene names and their corresponding protein ID, and match them with our results data:
+
+```{r gene_annot, message=FALSE,warning=FALSE}
+gene_annot <- read_tsv(file = here("results", "tables","uniprot_candida_idmapping.tsv"), col_names = T)
+
+head(gene_annot)
+```
+Alright, the `From` column contains the protein IDs we have in our DEG results. Therefore, we will get the gene names of protein ids that match to the protein id in our data:
+
+```{r}
+degs <- degs %>% 
+    left_join(gene_annot, by = c("gene" = "From")) %>%
+    dplyr::select(-c(Entry, gene)) %>% 
+    dplyr::rename(gene_name=`Gene Names (primary)`) %>%
+    dplyr::relocate(gene_name, .before=baseMean) %>% 
+    dplyr::filter(!is.na(gene_name)) 
+
+# Save it on a csv file
+write_csv(degs, file = here("results", "tables", "annotated_DEGs.csv"))
+```
+
+Alright, now  we have obtained the gene names. Let's fetch the top 20 degs, and continue with the visualizations.
+
+```{r}
+# Filter top 20 DEGs based on padj<0.05 cut-off and arranging by the logFC value in descending order
+top_degs <- degs %>% 
+    filter(padj<0.05) %>% 
+    arrange(desc(log2FoldChange)) %>%
+    head(20)
+
+write_csv(top_degs, file = here("results", "tables", "top_degs.csv"))
+```
+
+Here are the top 20 DEGs:
+
+```{r}
+top_degs %>% 
+kbl(caption = "Top 20 DEGs ranked by shrunk log2FC (FDR < 0.05)", booktabs = T, digits = 100) %>%
+kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center") %>%
+  scroll_box(width = "100%")
+```
+
+
+# 5. Visualization of Differential Expression Results
+
+Visualization of DE results provides intuitive insights into the magnitude and significance of gene expression changes. Let's start with MA plot, which is a very common visualization technique for DE analyses.
+
+## 5.1. MA Plot
+
+The MA plot visualizes mean expression (A) against log2 fold change (M) for each gene, highlighting significant differentially expressed genes.
+
+```{r ma_plot}
+plotMA(res_shrunk, ylim = c(-4, 4), main = "DESeq2 MA Plot")
+```
+
+The MA plot above displays the relationship between mean gene expression (x-axis, log scale) and log2 fold change (y-axis) for all analyzed genes following fluconazole treatment.
+
+-   **Each point** represents a single gene.\
+-   **Grey points** indicate genes with no significant differential expression (adjusted p-value ≥ 0.05).
+-   **Colored points** (blue, in the default DESeq2 style) highlight genes that are significantly differentially expressed at an FDR threshold of 0.05.
+
+Most genes cluster around a log2 fold change of zero, indicating stable expression between conditions.\
+A distinct set of genes shows substantial up- or down-regulation, particularly at higher mean expression levels—these represent the core transcriptomic response to fluconazole.\
+Notably, the majority of significant genes are upregulated, consistent with the overall summary statistics.
+
+No obvious global biases or technical artifacts are apparent, confirming the validity of the differential expression results.
+
+## 5.2. Volcano Plot
+
+The volcano plot displays the relationship between statistical significance (–log10 adjusted p-value) and effect size (log2 fold change), making it easy to identify genes that are both significantly and strongly regulated.
+
+```{r volcano_plot, warning=FALSE, message=FALSE}
+
+res_df <- as.data.frame(res_shrunk) %>% rownames_to_column("gene")
+res_df <- res_df %>% mutate(
+  sig = padj < 0.05 & !is.na(padj) & abs(log2FoldChange) > 1
+)
+volcano_plot <- ggplot(res_df, aes(x = log2FoldChange, y = -log10(padj), color = sig)) +
+  geom_point(alpha = 0.7) +
+  scale_color_manual(values = c("steelblue", "red")) +
+  theme_minimal() +
+  labs(x = "log2 Fold Change", y = "-log10(adj p-value)", color="Significancy") +
+  theme_bw()
+
+# Save the plot
+ggsave(plot = volcano_plot, filename = here("results","figures", "volcano_plot.png"),width = 8,height = 7,dpi=300,bg="white")
+
+volcano_plot
+```
+
+The volcano plot above visualizes the statistical significance (–log10 adjusted p-value) versus the magnitude (log2 fold change) of differential expression for each gene following fluconazole treatment in *Candida albicans*.
+
+-   **Red points** highlight genes that pass both statistical significance (`padj < 0.05`) and effect size (absolute log2 fold change \> 1) thresholds.
+-   **Grey points** represent genes with either non-significant or small expression changes.
+
+Most genes cluster around a log2 fold change of zero, indicating stable expression between conditions.\
+A subset of genes shows both high statistical significance and substantial upregulation, representing key candidates likely involved in the early response to fluconazole.
+
+The asymmetry of the plot (with more significant upregulated genes) is consistent with the overall result summary and reflects a strong, directional transcriptomic response to the drug.
+
+No obvious artifacts or batch effects are present.
+
+## 5.3 Heatmap of Top Differentially Expressed Genes
+
+A heatmap of the top 20 differentially expressed genes provides a focused view of expression patterns across all samples.
+
+```{r heatmap, fig.width=12, fig.height=12}
+
+rownames(vsd) <- gsub("^cds-", "", x = rownames(vsd))
+rownames(vsd) <- gene_annot$`Gene Names (primary)`[match(rownames(vsd), gene_annot$From)]
+
+topGenes <- top_degs$gene_name
+
+mat <- assay(vsd)[topGenes, , drop=FALSE]
+anno_col <- meta %>% column_to_rownames("sample")
+
+heatmap <- pheatmap(mat,
+         cluster_rows = TRUE,
+         show_rownames = TRUE,
+         cluster_cols = TRUE,
+         annotation_col = anno_col)
+
+ggsave(plot = heatmap, filename = here("results", "figures", "heatmap.png"), width = 12,height = 12,dpi=300,bg = "white")
+```
+
+The heatmap above visualizes the expression patterns of the top differentially expressed genes across all samples, with annotation tracks for replicate, treatment, strain, cell type, and sample title.
+
+-   **Rows** represent genes with the most significant changes in expression (lowest adjusted p-values).
+-   **Columns** represent individual samples, grouped by their experimental metadata.
+
+We can interpret this results as:
+
+-   Strong clustering by both strain and treatment is apparent, with samples from the same group showing similar expression profiles.
+-   The most upregulated and downregulated genes effectively separate fluconazole-treated and control samples, as well as sensitive (SC5314) and resistant (PLC124) strains.
+-   Replicates within each experimental group cluster closely, confirming the reliability of both experimental design and data quality.
+-   The color gradients indicate consistent, biologically meaningful shifts in gene expression in response to fluconazole, supporting the main conclusions of the study.
+
+# 6. Conclusion
+
+In this study, we analyzed the early transcriptional response of Candida albicans to fluconazole treatment in both a drug-sensitive reference strain (SC5314) and a fluconazole-resistant clinical isolate (PLC124). The differential gene expression analysis revealed a distinct and robust upregulation of genes involved in the ergosterol biosynthesis pathway — including ERG1, ERG5, ERG6, ERG10, and ERG11 — in the resistant isolate upon fluconazole exposure.
+
+These genes encode key enzymes responsible for maintaining membrane integrity and fluidity via ergosterol production. Notably, ERG11, the direct target of fluconazole, was significantly upregulated in resistant isolates, consistent with a compensatory overexpression mechanism commonly observed in azole-resistant C. albicans strains. Upregulation of MDR1, a multidrug transporter, further supports a classic resistance phenotype through increased efflux activity.
+
+The expression patterns visualized in the heatmap confirm tight clustering by strain and treatment, with upregulated ergosterol-related genes forming a distinct module in PLC124 fluconazole-treated samples. This transcriptional shift highlights that resistance in C. albicans is largely driven by coordinated gene regulation rather than sporadic changes.
+
+From a gut-relevant perspective, Candida albicans exists as a commensal organism in the gastrointestinal tract but can transition to a pathogenic state under immune suppression or antibiotic treatment. The upregulation of ergosterol biosynthesis genes — particularly ERG11 — under drug pressure may reflect a broader adaptive strategy allowing C. albicans to persist in the gut despite antifungal exposure. Moreover, enhanced expression of FRP1 (a ferric reductase) and ALG13 (involved in glycosylation) suggests a metabolic reprogramming that supports survival in nutrient-variable environments like the GI tract.
+
+These findings collectively underscore that transcriptional rewiring of sterol metabolism and drug efflux are central to fluconazole resistance. They also highlight potential molecular markers — such as ERG11 and MDR1 — for monitoring antifungal resistance in gut-associated Candida populations, particularly in immunocompromised patients receiving long-term azole therapy.
+
+These findings reinforce the study’s original insight: ***Transcriptional reprogramming, rather than changes in ribosome dynamics, is the primary driver of fluconazole resistance in *C. albicans*.***
+
+The workflow and results here lay a strong foundation for future functional and mechanistic studies, such as pathway enrichment, co-expression network analysis, or candidate gene validation in clinical isolates.
+
+# 7. Session Info
+
+```{r session_info}
+sessionInfo()
+```
